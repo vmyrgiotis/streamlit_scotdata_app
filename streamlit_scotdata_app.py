@@ -14,8 +14,8 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 # --- MinIO client and NetCDF file download ---
 minio_client = Minio(
     "general-gensto.datalabs.ceh.ac.uk",
-    access_key="cb17a3b6-65e8-4cb1-8b8c-8f51f513f23a", # gen_minio_access_key
-    secret_key="af8d4045-ce18-41c6-871f-a4394eb58c07", # gen_minio_secret_key
+    access_key=gen_minio_access_key,
+    secret_key=gen_minio_secret_key,
     secure=True
 )
 # Specify bucket and object name
