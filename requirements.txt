@@ -4,3 +4,4 @@ plotly
 minio
 xarray
 numpy
+netcdf4
