@@ -45,15 +45,15 @@ selected_var = st.selectbox('Select variable to plot:', data_vars)
 
 
 # 2. Load grid_info.nc directly from GitHub raw URL using xarray
-grid_url = "https://raw.githubusercontent.com/vmyrgiotis/streamlit_scotdata_app/main/grid_info.nc"
-grid_ds = xr.open_dataset(grid_url)
+# grid_url = "https://github.com/vmyrgiotis/streamlit_scotdata_app/blob/master/grid_info.nc"
+grid_ds = xr.open_dataset("grid_info.nc")
 lat = grid_ds['lat'].values
 lon = grid_ds['lon'].values
 
 # 3. Load Parquet file for selected variable from GitHub raw URL
 # scotland_merged_dataset.parquet is stored on the GitHub repo (raw URL)
-github_raw_url = "https://github.com/vmyrgiotis/streamlit_scotdata_app/scotland_merged_dataset.parquet"
-cols = ['lat', 'lon', selected_var]
+# github_raw_url = "https://github.com/vmyrgiotis/streamlit_scotdata_app/blob/master/scotland_merged_dataset.parquet"
+cols = ['lat', 'lon', 'scotland_merged_dataset.parquet']
 df = pd.read_parquet(github_raw_url, columns=cols)
 
 # 4. Read grid info from NetCDF
