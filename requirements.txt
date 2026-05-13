@@ -5,3 +5,4 @@ minio
 xarray
 numpy
 netcdf4
+dask
