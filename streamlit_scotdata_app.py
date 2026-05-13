@@ -43,15 +43,12 @@ st.title('Scotland NPP Data Explorer')
 selected_var = st.selectbox('Select variable to plot:', data_vars)
 
 
-# 2. Always download grid_info.nc from a remote source (not in repo)
-with tempfile.NamedTemporaryFile(delete=False, suffix='.nc') as tmp_grid:
-    # grid_info.nc should be downloaded from a remote source or GitHub if needed
-    # Example: download from GitHub raw URL (update as needed)
-    import requests
-    grid_url = "https://github.com/vmyrgiotis/streamlit_scotdata_app/grid_info.nc"
-    r = requests.get(grid_url)
-    tmp_grid.write(r.content)
-    grid_path = tmp_grid.name
+
+# 2. Load grid_info.nc directly from GitHub raw URL using xarray
+grid_url = "https://raw.githubusercontent.com/vmyrgiotis/streamlit_scotdata_app/main/grid_info.nc"
+grid_ds = xr.open_dataset(grid_url)
+lat = grid_ds['lat'].values
+lon = grid_ds['lon'].values
 
 # 3. Load Parquet file for selected variable from GitHub raw URL
 # scotland_merged_dataset.parquet is stored on the GitHub repo (raw URL)
