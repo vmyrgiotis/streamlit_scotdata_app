@@ -5,5 +5,3 @@ minio
 xarray
 numpy
 netcdf4
-duckdb
-s3fs

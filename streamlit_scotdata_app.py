@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from minio import Minio
 import tempfile
 import os
 import xarray as xr
@@ -9,19 +8,7 @@ from datetime import datetime
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-# Load MinIO credentials from Streamlit secrets
-MINIO_ACCESS_KEY = st.secrets["MINIO_ACCESS_KEY"]
-MINIO_SECRET_KEY = st.secrets["MINIO_SECRET_KEY"]
 
-# --- MinIO client and NetCDF file download ---
-minio_client = Minio(
-    "general-gensto.datalabs.ceh.ac.uk",
-    access_key=MINIO_ACCESS_KEY,
-    secret_key=MINIO_SECRET_KEY,
-    secure=True
-)
-# Specify bucket and object name
-bucket_name = "notebooks"
 
 # --- Variable options ---
 data_vars = [
@@ -56,24 +43,21 @@ st.title('Scotland NPP Data Explorer')
 selected_var = st.selectbox('Select variable to plot:', data_vars)
 
 
-# 2. Always download grid_info.nc from MinIO (not in repo)
+# 2. Always download grid_info.nc from a remote source (not in repo)
 with tempfile.NamedTemporaryFile(delete=False, suffix='.nc') as tmp_grid:
-    # grid_info.nc is stored in MinIO, not in the repo
-    minio_client.fget_object(bucket_name, "grid_info.nc", tmp_grid.name)
+    # grid_info.nc should be downloaded from a remote source or GitHub if needed
+    # Example: download from GitHub raw URL (update as needed)
+    import requests
+    grid_url = "https://github.com/vmyrgiotis/streamlit_scotdata_app/grid_info.nc"
+    r = requests.get(grid_url)
+    tmp_grid.write(r.content)
     grid_path = tmp_grid.name
 
-# 3. Always load Parquet file for selected variable from MinIO (not in repo)
-import s3fs
-# scotland_merged_dataset.parquet is stored in MinIO, not in the repo
-s3_url = f"s3://{bucket_name}/scotland_merged_dataset.parquet"
-fs = s3fs.S3FileSystem(
-    key=MINIO_ACCESS_KEY,
-    secret=MINIO_SECRET_KEY,
-    client_kwargs={"endpoint_url": "https://general-gensto.datalabs.ceh.ac.uk"}
-)
+# 3. Load Parquet file for selected variable from GitHub raw URL
+# scotland_merged_dataset.parquet is stored on the GitHub repo (raw URL)
+github_raw_url = "https://github.com/vmyrgiotis/streamlit_scotdata_app/scotland_merged_dataset.parquet"
 cols = ['lat', 'lon', selected_var]
-with fs.open(s3_url, 'rb') as f:
-    df = pd.read_parquet(f, columns=cols)
+df = pd.read_parquet(github_raw_url, columns=cols)
 
 # 4. Read grid info from NetCDF
 grid_ds = xr.open_dataset(grid_path)
