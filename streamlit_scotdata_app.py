@@ -9,7 +9,9 @@ from datetime import datetime
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-
+# Load MinIO credentials from Streamlit secrets
+MINIO_ACCESS_KEY = st.secrets["MINIO_ACCESS_KEY"]
+MINIO_SECRET_KEY = st.secrets["MINIO_SECRET_KEY"]
 
 # --- MinIO client and NetCDF file download ---
 minio_client = Minio(
