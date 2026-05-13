@@ -80,10 +80,25 @@ LC_TYPE5_INFO = {
 vegetation_codes = [1, 2, 3, 4, 5, 7, 8]
 
 
+
+# Download file from MinIO if not present locally
 @st.cache_resource
 def open_dataset():
     if not MERGED_FILE.exists():
-        raise FileNotFoundError(f"Missing file: {MERGED_FILE}")
+        # Download from MinIO
+        client = Minio(
+            MINIO_ENDPOINT,
+            access_key=MINIO_ACCESS_KEY,
+            secret_key=MINIO_SECRET_KEY,
+            secure=True,
+        )
+        try:
+            obj = client.get_object(MINIO_BUCKET, NETCDF_FILENAME)
+            with open(MERGED_FILE, "wb") as f:
+                for d in obj.stream(32 * 1024):
+                    f.write(d)
+        except Exception as e:
+            raise FileNotFoundError(f"Could not download {NETCDF_FILENAME} from MinIO: {e}")
     return xr.open_dataset(MERGED_FILE, chunks="auto", cache=False)
 
 
