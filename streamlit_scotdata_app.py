@@ -61,17 +61,17 @@ with tempfile.NamedTemporaryFile(delete=False, suffix='.nc') as tmp_grid:
     minio_client.fget_object(bucket_name, "grid_info.nc", tmp_grid.name)
     grid_path = tmp_grid.name
 
-# 3. Query Parquet file for selected variable using DuckDB S3 support
-duckdb.sql(f"""
-    SET s3_region='us-east-1';
-    SET s3_access_key_id='{MINIO_ACCESS_KEY}';
-    SET s3_secret_access_key='{MINIO_SECRET_KEY}';
-    SET s3_endpoint='general-gensto.datalabs.ceh.ac.uk';
-    SET s3_url_style='path';
-""")
-parquet_url = f"s3://{bucket_name}/scotland_merged_dataset.parquet"
-query = f"SELECT lat, lon, {selected_var} FROM read_parquet('{parquet_url}')"
-df = duckdb.sql(query).df()
+# 3. Load Parquet file for selected variable using pandas and s3fs
+import s3fs
+s3_url = f"s3://{bucket_name}/scotland_merged_dataset.parquet"
+fs = s3fs.S3FileSystem(
+    key=MINIO_ACCESS_KEY,
+    secret=MINIO_SECRET_KEY,
+    client_kwargs={"endpoint_url": "https://general-gensto.datalabs.ceh.ac.uk"}
+)
+cols = ['lat', 'lon', selected_var]
+with fs.open(s3_url, 'rb') as f:
+    df = pd.read_parquet(f, columns=cols)
 
 # 4. Read grid info from NetCDF
 grid_ds = xr.open_dataset(grid_path)
