@@ -22,7 +22,7 @@ minio_client = Minio(
 )
 # Specify bucket and object name
 bucket_name = "notebooks"
-object_name = "scotland_merged_dataset.nc"
+object_name = "scotland_merged_dataset_v2.nc"
 
 # --- Variable options ---
 data_vars = [
@@ -63,28 +63,31 @@ def load_xarray_and_df(var_name):
     with tempfile.NamedTemporaryFile(delete=False, suffix='.nc') as tmp:
         minio_client.fget_object(bucket_name, object_name, tmp.name)
         tmp_path = tmp.name
-    # Open only the selected variable and index_var
-    ds = xr.open_dataset(tmp_path, engine=None)[[var_name, index_var]]
+    # Open only the selected variable and LC_Type5 if needed
+    # Only load LC_Type5 if selected_var is Npp_500m or LC_Type5
+    with xr.open_dataset(tmp_path, engine=None) as ds_all:
+        all_vars = set(ds_all.data_vars)
+    if var_name == index_var or var_name == 'Npp_500m':
+        vars_to_keep = set([var_name, index_var]) & all_vars
+    else:
+        vars_to_keep = set([var_name]) & all_vars
+    drop_vars = list(all_vars - vars_to_keep)
+    ds = xr.open_dataset(tmp_path, engine=None, drop_variables=drop_vars)
     # Apply filtering as requested
     if 'Npp_500m' in ds and 'LC_Type5' in ds:
         ds['Npp_500m'] = ds['Npp_500m'].where(ds['LC_Type5'].isin(vegetation_codes))
     if 'ocs_0_100cm' in ds:
         ds['ocs_0_100cm'] = ds['ocs_0_100cm'].where(ds['ocs_0_100cm'] > 0)
     # Convert time to datetime64 if needed
-    # For t2m and tp, use 'valid_time' as the time variable
-    time_var = 'time'
-    if var_name in ['t2m', 'tp'] and 'valid_time' in ds:
-        time_var = 'valid_time'
-        # Rename for consistency in downstream code
-        ds = ds.rename({'valid_time': 'time'})
     if 'time' in ds:
         try:
             ds['time'] = ds.indexes['time'].to_datetimeindex()
         except Exception:
             ds['time'] = ds['time'].astype(str)
     # For time series plot, use DataFrame
-    sel_vars = [var_name, index_var]
-    sel_vars = [v for v in sel_vars if v in ds.data_vars]
+    sel_vars = [var_name]
+    if index_var in ds.data_vars and (var_name == index_var or var_name == 'Npp_500m'):
+        sel_vars.append(index_var)
     df = ds[sel_vars].to_dataframe().reset_index()
     df = df.dropna(subset=[var_name])
     # Clean up temp file after loading
@@ -99,10 +102,6 @@ if selected_var == 'ocs_0_100cm' or 'time' not in ds[selected_var].dims:
     da = ds[selected_var]
     selected_year = None
 else:
-    # For t2m and tp, use 'valid_time' as the time variable if present
-    time_var = 'time'
-    if selected_var in ['t2m', 'tp'] and 'valid_time' in ds:
-        time_var = 'valid_time'
     # Year selection with slider (annual data)
     unique_years = sorted({pd.to_datetime(t).year for t in ds['time'].values})
     selected_year = st.slider('Select year:', min_value=min(unique_years), max_value=max(unique_years), value=min(unique_years), format="%d")
