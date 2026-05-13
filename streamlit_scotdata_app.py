@@ -51,50 +51,60 @@ lc_type5_info = {
 # Vegetation codes only (exclude 0, 9, 10, 11)
 vegetation_codes = [1, 2, 3, 4, 5, 7, 8]
 
-st.title('Map & Time Series Explorer')
+st.title('Scotland NPP Data Explorer')
 
-# Variable selection
+# 1. User selects variable
 selected_var = st.selectbox('Select variable to plot:', data_vars)
 
-# Only open the dataset and load data after variable selection
-@st.cache_data(show_spinner=True)
-def load_xarray_and_df(var_name):
-    # Download the NetCDF file to a temporary file
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.nc') as tmp:
-        minio_client.fget_object(bucket_name, object_name, tmp.name)
-        tmp_path = tmp.name
-    # Open only the selected variable and LC_Type5 if needed
-    # Only load LC_Type5 if selected_var is Npp_500m or LC_Type5
-    with xr.open_dataset(tmp_path, engine=None) as ds_all:
-        all_vars = set(ds_all.data_vars)
-    if var_name == index_var or var_name == 'Npp_500m':
-        vars_to_keep = set([var_name, index_var]) & all_vars
-    else:
-        vars_to_keep = set([var_name]) & all_vars
-    drop_vars = list(all_vars - vars_to_keep)
-    ds = xr.open_dataset(tmp_path, engine=None, drop_variables=drop_vars)
-    # Apply filtering as requested
-    if 'Npp_500m' in ds and 'LC_Type5' in ds:
-        ds['Npp_500m'] = ds['Npp_500m'].where(ds['LC_Type5'].isin(vegetation_codes))
-    if 'ocs_0_100cm' in ds:
-        ds['ocs_0_100cm'] = ds['ocs_0_100cm'].where(ds['ocs_0_100cm'] > 0)
-    # Convert time to datetime64 if needed
-    if 'time' in ds:
-        try:
-            ds['time'] = ds.indexes['time'].to_datetimeindex()
-        except Exception:
-            ds['time'] = ds['time'].astype(str)
-    # For time series plot, use DataFrame
-    sel_vars = [var_name]
-    if index_var in ds.data_vars and (var_name == index_var or var_name == 'Npp_500m'):
-        sel_vars.append(index_var)
-    df = ds[sel_vars].to_dataframe().reset_index()
-    df = df.dropna(subset=[var_name])
-    # Clean up temp file after loading
-    os.remove(tmp_path)
-    return ds, df
+# 2. Download grid_info.nc from MinIO
+with tempfile.NamedTemporaryFile(delete=False, suffix='.nc') as tmp_grid:
+    minio_client.fget_object(bucket_name, "grid_info.nc", tmp_grid.name)
+    grid_path = tmp_grid.name
 
-ds, df = load_xarray_and_df(selected_var)
+# 3. Query Parquet file for selected variable using DuckDB S3 support
+duckdb.sql(f"""
+    SET s3_region='us-east-1';
+    SET s3_access_key_id='{MINIO_ACCESS_KEY}';
+    SET s3_secret_access_key='{MINIO_SECRET_KEY}';
+    SET s3_endpoint='general-gensto.datalabs.ceh.ac.uk';
+    SET s3_url_style='path';
+""")
+parquet_url = f"s3://{bucket_name}/scotland_merged_dataset.parquet"
+query = f"SELECT lat, lon, {selected_var} FROM read_parquet('{parquet_url}')"
+df = duckdb.sql(query).df()
+
+# 4. Read grid info from NetCDF
+grid_ds = xr.open_dataset(grid_path)
+lat = grid_ds['lat'].values
+lon = grid_ds['lon'].values
+
+# 5. Project data onto grid using lat/lon
+# Assumes df has columns 'lat', 'lon', and the variable
+import numpy as np
+grid_data = np.full((len(lat), len(lon)), np.nan)
+lat_idx = {v: i for i, v in enumerate(lat)}
+lon_idx = {v: i for i, v in enumerate(lon)}
+
+for _, row in df.iterrows():
+    i = lat_idx.get(row['lat'])
+    j = lon_idx.get(row['lon'])
+    if i is not None and j is not None:
+        grid_data[i, j] = row[selected_var]
+
+# 6. Plot
+fig = px.imshow(
+    grid_data,
+    origin='lower',
+    aspect='auto',
+    labels={'x': 'Longitude', 'y': 'Latitude', 'color': selected_var},
+    x=lon,
+    y=lat,
+    color_continuous_scale='Viridis',
+    title=f'{selected_var} projected on grid'
+)
+fig.update_xaxes(range=[-8, 2])
+fig.update_yaxes(range=[54, 61])
+st.plotly_chart(fig, use_container_width=True)
 
 
 # Handle ocs_0_100cm (no time dimension)
