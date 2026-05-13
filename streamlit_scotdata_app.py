@@ -22,7 +22,6 @@ minio_client = Minio(
 )
 # Specify bucket and object name
 bucket_name = "notebooks"
-object_name = "scotland_merged_dataset_v2.nc"
 
 # --- Variable options ---
 data_vars = [
@@ -56,13 +55,16 @@ st.title('Scotland NPP Data Explorer')
 # 1. User selects variable
 selected_var = st.selectbox('Select variable to plot:', data_vars)
 
-# 2. Download grid_info.nc from MinIO
+
+# 2. Always download grid_info.nc from MinIO (not in repo)
 with tempfile.NamedTemporaryFile(delete=False, suffix='.nc') as tmp_grid:
+    # grid_info.nc is stored in MinIO, not in the repo
     minio_client.fget_object(bucket_name, "grid_info.nc", tmp_grid.name)
     grid_path = tmp_grid.name
 
-# 3. Load Parquet file for selected variable using pandas and s3fs
+# 3. Always load Parquet file for selected variable from MinIO (not in repo)
 import s3fs
+# scotland_merged_dataset.parquet is stored in MinIO, not in the repo
 s3_url = f"s3://{bucket_name}/scotland_merged_dataset.parquet"
 fs = s3fs.S3FileSystem(
     key=MINIO_ACCESS_KEY,
