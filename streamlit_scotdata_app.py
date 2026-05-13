@@ -50,6 +50,7 @@ MINIO_SECRET_KEY = st.secrets["MINIO_SECRET_KEY"]
 MINIO_ENDPOINT = "general-gensto.datalabs.ceh.ac.uk"
 MINIO_BUCKET = "notebooks"
 NETCDF_FILENAME = "scotland_merged_dataset_v2.nc"
+MERGED_FILE = Path(NETCDF_FILENAME)
 
 INDEX_VAR = "LC_Type5"
 
