@@ -53,8 +53,8 @@ lon = grid_ds['lon'].values
 # 3. Load Parquet file for selected variable from GitHub raw URL
 # scotland_merged_dataset.parquet is stored on the GitHub repo (raw URL)
 # github_raw_url = "https://github.com/vmyrgiotis/streamlit_scotdata_app/blob/master/scotland_merged_dataset.parquet"
-cols = ['lat', 'lon', 'scotland_merged_dataset.parquet']
-df = pd.read_parquet(github_raw_url, columns=cols)
+cols = ['lat', 'lon', selected_var]
+df = pd.read_parquet('scotland_merged_dataset.parquet', columns=cols)
 
 # 4. Read grid info from NetCDF
 grid_ds = xr.open_dataset(grid_path)
