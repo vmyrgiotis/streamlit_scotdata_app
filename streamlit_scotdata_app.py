@@ -1,196 +1,389 @@
-import streamlit as st
+import warnings
+from pathlib import Path
+from io import BytesIO
+
+import numpy as np
 import pandas as pd
 import plotly.express as px
-import tempfile
-import os
+import streamlit as st
 import xarray as xr
-from datetime import datetime
-import warnings
+from minio import Minio
+
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
+st.set_page_config(page_title="Scotland merged NetCDF explorer", layout="wide")
 
+st.markdown(
+    """
+    <style>
+        .block-container {
+            max-width: 980px;
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        div[data-baseweb="select"] {
+            max-width: 420px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        div[role="radiogroup"] {
+            justify-content: center;
+        }
+        .stTabs [data-baseweb="tab-list"] {
+            justify-content: center;
+        }
+        .stTabs [data-baseweb="tab"] {
+            margin-left: 0.25rem;
+            margin-right: 0.25rem;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-# --- Variable options ---
-data_vars = [
-    'Npp_500m',
-    't2m',
-    'tp',
-    'ocs_0_100cm'
+MINIO_ENDPOINT = "general-gensto.datalabs.ceh.ac.uk"
+MINIO_ACCESS_KEY = "cb17a3b6-65e8-4cb1-8b8c-8f51f513f23a"
+MINIO_SECRET_KEY = "af8d4045-ce18-41c6-871f-a4394eb58c07"
+MINIO_BUCKET = "notebooks"
+NETCDF_FILENAME = "scotland_merged_dataset_v2.nc"
+
+INDEX_VAR = "LC_Type5"
+
+VARIABLE_OPTIONS = [
+    "Npp_500m",
+    "t2m",
+    "tp",
+    "ocs_0_100cm",
+    "LC_Type5",
 ]
-index_var = 'LC_Type5'
 
-# LC_Type5 code to name and color mapping
-lc_type5_info = {
-    0:  {"name": "Water Bodies", "color": "#1c0dff"},
-    1:  {"name": "Evergreen Needleleaf Trees", "color": "#05450a"},
-    2:  {"name": "Evergreen Broadleaf Trees", "color": "#086a10"},
-    3:  {"name": "Deciduous Needleleaf Trees", "color": "#54a708"},
-    4:  {"name": "Deciduous Broadleaf Trees", "color": "#78d203"},
-    5:  {"name": "Shrub", "color": "#dcd159"},
-    6:  {"name": "Not Cultivated", "color": "#b6ff05"},
-    7:  {"name": "Cereal Croplands", "color": "#dade48"},
-    8:  {"name": "Broadleaf Croplands", "color": "#c24f44"},
-    9:  {"name": "Urban and Built-up Lands", "color": "#a5a5a5"},
+LC_TYPE5_INFO = {
+    0: {"name": "Water Bodies", "color": "#1c0dff"},
+    1: {"name": "Evergreen Needleleaf Trees", "color": "#05450a"},
+    2: {"name": "Evergreen Broadleaf Trees", "color": "#086a10"},
+    3: {"name": "Deciduous Needleleaf Trees", "color": "#54a708"},
+    4: {"name": "Deciduous Broadleaf Trees", "color": "#78d203"},
+    5: {"name": "Shrub", "color": "#dcd159"},
+    6: {"name": "Not Cultivated", "color": "#b6ff05"},
+    7: {"name": "Cereal Croplands", "color": "#dade48"},
+    8: {"name": "Broadleaf Croplands", "color": "#c24f44"},
+    9: {"name": "Urban and Built-up Lands", "color": "#a5a5a5"},
     10: {"name": "Permanent Snow and Ice", "color": "#69fff8"},
     11: {"name": "Non-Vegetated Lands", "color": "#f9ffa4"},
 }
-# Vegetation codes only (exclude 0, 9, 10, 11)
+
 vegetation_codes = [1, 2, 3, 4, 5, 7, 8]
 
-st.title('Scotland NPP Data Explorer')
 
-# 1. User selects variable
-selected_var = st.selectbox('Select variable to plot:', data_vars)
-
-
-
-# 2. Load grid_info.nc directly from GitHub raw URL using xarray
-# grid_url = "https://github.com/vmyrgiotis/streamlit_scotdata_app/blob/master/grid_info.nc"
-grid_ds = xr.open_dataset("grid_info.nc")
-lat = grid_ds['lat'].values
-lon = grid_ds['lon'].values
-
-# 3. Load Parquet file for selected variable from GitHub raw URL
-# scotland_merged_dataset.parquet is stored on the GitHub repo (raw URL)
-# github_raw_url = "https://github.com/vmyrgiotis/streamlit_scotdata_app/blob/master/scotland_merged_dataset.parquet"
-cols = ['lat', 'lon', selected_var]
-df = pd.read_parquet('scotland_merged_dataset.parquet', columns=cols)
-
-# 4. Read grid info from NetCDF
-grid_ds = xr.open_dataset(grid_path)
-lat = grid_ds['lat'].values
-lon = grid_ds['lon'].values
-
-# 5. Project data onto grid using lat/lon
-# Assumes df has columns 'lat', 'lon', and the variable
-import numpy as np
-grid_data = np.full((len(lat), len(lon)), np.nan)
-lat_idx = {v: i for i, v in enumerate(lat)}
-lon_idx = {v: i for i, v in enumerate(lon)}
-
-for _, row in df.iterrows():
-    i = lat_idx.get(row['lat'])
-    j = lon_idx.get(row['lon'])
-    if i is not None and j is not None:
-        grid_data[i, j] = row[selected_var]
-
-# 6. Plot
-fig = px.imshow(
-    grid_data,
-    origin='lower',
-    aspect='auto',
-    labels={'x': 'Longitude', 'y': 'Latitude', 'color': selected_var},
-    x=lon,
-    y=lat,
-    color_continuous_scale='Viridis',
-    title=f'{selected_var} projected on grid'
-)
-fig.update_xaxes(range=[-8, 2])
-fig.update_yaxes(range=[54, 61])
-st.plotly_chart(fig, use_container_width=True)
+@st.cache_resource
+def open_dataset():
+    if not MERGED_FILE.exists():
+        raise FileNotFoundError(f"Missing file: {MERGED_FILE}")
+    return xr.open_dataset(MERGED_FILE, chunks="auto", cache=False)
 
 
-# Handle ocs_0_100cm (no time dimension)
-if selected_var == 'ocs_0_100cm' or 'time' not in ds[selected_var].dims:
-    da = ds[selected_var]
-    selected_year = None
-else:
-    # Year selection with slider (annual data)
-    unique_years = sorted({pd.to_datetime(t).year for t in ds['time'].values})
-    selected_year = st.slider('Select year:', min_value=min(unique_years), max_value=max(unique_years), value=min(unique_years), format="%d")
-    # Select data for the selected year (xarray)
-    year_mask = pd.to_datetime(ds['time'].values).year == selected_year
-    da = ds[selected_var].isel(time=year_mask)
+def load_selected_dataset(var_name):
+    ds = open_dataset()
+    if var_name == INDEX_VAR:
+        return ds[[var_name]]
+    return ds[[var_name, INDEX_VAR]]
 
-# Map plot using plotly imshow, centered on Scotland
-if selected_var == 'ocs_0_100cm' or 'time' not in ds[selected_var].dims:
-    st.subheader(f'Map of {selected_var}')
-else:
-    st.subheader(f'Map of {selected_var} for {selected_year}')
-if da.size > 0:
-    import numpy as np
-    # da: dims (lat, lon) or (time, lat, lon) with time filtered
-    if 'time' in da.dims:
-        da2d = da.squeeze('time')
+
+def apply_mask(ds, var_name):
+    if var_name == INDEX_VAR:
+        return ds[var_name]
+
+    da = ds[var_name]
+    lc = ds[INDEX_VAR]
+
+    if var_name == "ocs_0_100cm":
+        ds = ds.where((da >= 0) & (lc.isin(vegetation_codes)))
+        return ds[var_name]
+
+    if var_name == "Npp_500m":
+        ds = ds.where((da >= 0) & (da <= 2) & (lc.isin(vegetation_codes)))
+        return ds[var_name]
+
+    if var_name == "tp":
+        ds = ds.where((da >= 0) & (lc.isin(vegetation_codes)))
+        return ds[var_name]
+
+    if var_name == "t2m":
+        ds = ds.where((da >= 0) & (lc.isin(vegetation_codes)))
+        return ds[var_name]
+
+    return da
+
+
+def select_single_year(da, selected_year):
+    if "time" not in da.dims or selected_year is None:
+        return da
+
+    da = da.sel(time=da["time"].dt.year == selected_year)
+
+    ntime = da.sizes.get("time", 0)
+    if ntime > 1:
+        da = da.mean(dim="time", skipna=True)
+    elif ntime == 1:
+        da = da.isel(time=0, drop=True)
+
+    return da
+
+
+@st.cache_data
+def time_da_to_df(var_name):
+    ds = load_selected_dataset(var_name)
+    da = apply_mask(ds, var_name).astype("float32")
+
+    if "time" not in da.dims:
+        return pd.DataFrame(columns=["year", var_name])
+
+    dims_to_mean = [d for d in da.dims if d != "time"]
+    ts = da.mean(dim=dims_to_mean, skipna=True).compute()
+
+    df = pd.DataFrame({
+        "year": ts["time"].dt.year.values,
+        var_name: ts.values,
+    })
+    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+    df = df.dropna(subset=["year", var_name])
+
+    if not df.empty:
+        df["year"] = df["year"].astype(int)
+
+    return df
+
+
+@st.cache_data
+def time_var_by_lc_df(var_name):
+    ds = load_selected_dataset(var_name)
+    da = apply_mask(ds, var_name).astype("float32")
+
+    if "time" not in da.dims:
+        return pd.DataFrame(columns=["year", var_name, "LC_Type5_name"])
+
+    lc = ds[INDEX_VAR]
+    series_frames = []
+
+    for code, info in LC_TYPE5_INFO.items():
+        masked = da.where(lc == code)
+        dims_to_mean = [d for d in masked.dims if d != "time"]
+        ts = masked.mean(dim=dims_to_mean, skipna=True).compute()
+
+        tmp = pd.DataFrame({
+            "year": ts["time"].dt.year.values,
+            var_name: ts.values,
+        })
+        tmp["year"] = pd.to_numeric(tmp["year"], errors="coerce")
+        tmp = tmp.dropna(subset=["year", var_name])
+
+        if not tmp.empty:
+            tmp["year"] = tmp["year"].astype(int)
+            tmp["LC_Type5_code"] = code
+            tmp["LC_Type5_name"] = info["name"]
+            series_frames.append(tmp)
+
+    if series_frames:
+        return pd.concat(series_frames, ignore_index=True)
+
+    return pd.DataFrame(columns=["year", var_name, "LC_Type5_code", "LC_Type5_name"])
+
+
+@st.cache_data
+def time_lc_fraction_df():
+    ds = open_dataset()[[INDEX_VAR]]
+    da = ds[INDEX_VAR]
+
+    series_frames = []
+
+    for code, info in LC_TYPE5_INFO.items():
+        masked = xr.where(da == code, 1, 0)
+        dims_to_mean = [d for d in masked.dims if d != "time"]
+        ts = masked.mean(dim=dims_to_mean, skipna=True).compute()
+
+        tmp = pd.DataFrame({
+            "year": ts["time"].dt.year.values,
+            "fraction": ts.values,
+        })
+        tmp["year"] = pd.to_numeric(tmp["year"], errors="coerce")
+        tmp = tmp.dropna(subset=["year", "fraction"])
+
+        if not tmp.empty:
+            tmp["year"] = tmp["year"].astype(int)
+            tmp["LC_Type5_name"] = info["name"]
+            series_frames.append(tmp)
+
+    if series_frames:
+        return pd.concat(series_frames, ignore_index=True)
+
+    return pd.DataFrame(columns=["year", "fraction", "LC_Type5_name"])
+
+
+def make_map(da, selected_var, selected_year=None):
+    if "lat" not in da.coords or "lon" not in da.coords:
+        st.error(f"{selected_var} must have 'lat' and 'lon' coordinates in the NetCDF file.")
+        return
+
+    lat0 = da["lat"].isel(lat=0).compute().item()
+    latn = da["lat"].isel(lat=-1).compute().item()
+    if lat0 > latn:
+        da = da.sortby("lat")
+
+    title = f"{selected_var}" if selected_year is None else f"{selected_var} ({selected_year})"
+    plot_da = da.astype("float32").compute()
+
+    if selected_var == INDEX_VAR:
+        sorted_items = sorted(LC_TYPE5_INFO.items())
+        color_scale = [item[1]["color"] for item in sorted_items]
+        tickvals = [item[0] for item in sorted_items]
+        ticktext = [item[1]["name"] for item in sorted_items]
+
+        fig = px.imshow(
+            plot_da.values,
+            origin="lower",
+            aspect="auto",
+            x=plot_da["lon"].values,
+            y=plot_da["lat"].values,
+            labels={"x": "Longitude", "y": "Latitude", "color": selected_var},
+            color_continuous_scale=color_scale,
+            zmin=min(tickvals),
+            zmax=max(tickvals),
+            title=title,
+        )
+        fig.update_coloraxes(
+            colorbar=dict(
+                tickmode="array",
+                tickvals=tickvals,
+                ticktext=ticktext,
+            )
+        )
     else:
-        da2d = da
-    # Only filter out non-vegetation codes if Npp_500m is selected
-    if selected_var == 'Npp_500m' and index_var in da2d.coords:
-        mask = np.isin(da2d[index_var].values, vegetation_codes)
-        if mask.shape == da2d.shape:
-            da2d = da2d.where(mask)
-    # For tp and t2m, plot all valid data (no mask)
-    # Ensure lat is sorted ascending for imshow
-    if np.any(np.diff(da2d['lat'].values) < 0):
-        da2d = da2d.sortby('lat')
-    # Remove NaNs for imshow
-    plot_data = np.where(np.isnan(da2d.values), None, da2d.values)
-    fig = px.imshow(
-        plot_data,
-        origin='lower',
-        aspect='auto',
-        labels={'x': 'Longitude', 'y': 'Latitude', 'color': selected_var},
-        x=da2d['lon'].values,
-        y=da2d['lat'].values,
-        color_continuous_scale='Viridis',
-        title=f'{selected_var}' + (f' ({selected_year})' if selected_year else ''),
-    )
-    # Set map extent to Scotland
+        fig = px.imshow(
+            plot_da.values,
+            origin="lower",
+            aspect="auto",
+            x=plot_da["lon"].values,
+            y=plot_da["lat"].values,
+            labels={"x": "Longitude", "y": "Latitude", "color": selected_var},
+            color_continuous_scale="Viridis",
+            title=title,
+        )
+
     fig.update_xaxes(range=[-8, 2])
     fig.update_yaxes(range=[54, 61])
     st.plotly_chart(fig, use_container_width=True)
-else:
-    if selected_var == 'ocs_0_100cm' or 'time' not in ds[selected_var].dims:
-        st.warning('No data available.')
+
+
+st.markdown("<h1 style='text-align: center;'>Scotland merged NetCDF explorer</h1>", unsafe_allow_html=True)
+st.markdown(
+    "<p style='text-align: center;'>Explore spatial maps and annual time series, including LC_Type5 class means for variables with a time dimension.</p>",
+    unsafe_allow_html=True,
+)
+
+try:
+    ds0 = open_dataset()
+except FileNotFoundError as e:
+    st.error(str(e))
+    st.stop()
+except Exception as e:
+    st.error(f"Could not open dataset: {e}")
+    st.stop()
+
+available_vars = [v for v in VARIABLE_OPTIONS if v in ds0.data_vars]
+
+selected_var = st.selectbox("Select variable", options=available_vars, index=0)
+
+st.markdown(
+    f"<p style='text-align: center;'>Selected variable: <b>{selected_var}</b></p>",
+    unsafe_allow_html=True,
+)
+
+ds = load_selected_dataset(selected_var)
+da = apply_mask(ds, selected_var)
+has_time = ("time" in da.dims) and (selected_var != "ocs_0_100cm")
+
+tab_labels = ["Map"]
+if has_time:
+    tab_labels.append("Time series")
+
+tabs = st.tabs(tab_labels)
+
+with tabs[0]:
+    selected_year = None
+
+    if "time" in da.dims:
+        years = da["time"].dt.year.compute().values
+        unique_years = sorted(np.unique(years))
+
+        selected_year = st.selectbox(
+            "Select year for map",
+            options=[int(y) for y in unique_years],
+            index=0,
+        )
+
+        da_map = select_single_year(da, selected_year)
     else:
-        st.warning('No data for selected year.')
+        da_map = da
 
-# --- Memory Optimization ---
-# Downcast numeric columns only if they exist
-for col in ['lat', 'lon', selected_var]:
-    if col in df.columns:
-        df[col] = pd.to_numeric(df[col], downcast='float')
-if index_var in df.columns:
-    df[index_var] = pd.to_numeric(df[index_var], downcast='integer')
+    make_map(da_map, selected_var, selected_year)
 
-
-# Time series plot per LC_Type5 (annual) only for selected variables and vegetation codes
-if selected_var in ['Npp_500m', 't2m', 'tp']:
-    ts_df = df.copy()
-    ts_df['year'] = pd.to_datetime(ts_df['time']).dt.year
-    if selected_var == 'Npp_500m':
-        # Filter to vegetation codes only for Npp_500m
-        ts_df = ts_df[ts_df[index_var].isin(vegetation_codes)]
-        # Map LC_Type5 code to name and color
-        ts_df['LC_Type5_name'] = ts_df[index_var].map(lambda x: lc_type5_info.get(x, {}).get('name', str(x)))
-        color_map = {lc_type5_info[k]['name']: lc_type5_info[k]['color'] for k in vegetation_codes}
-        ts_df = ts_df.groupby(['year', 'LC_Type5_name'])[selected_var].mean().reset_index()
-        st.subheader(f'Time Series of {selected_var} (per LC Type)')
-        if not ts_df.empty:
-            fig_ts = px.line(
-                ts_df,
-                x='year',
-                y=selected_var,
-                color='LC_Type5_name',
-                markers=True,
-                color_discrete_map=color_map
-            )
-            st.plotly_chart(fig_ts)
+if has_time:
+    with tabs[1]:
+        if selected_var == INDEX_VAR:
+            ts_plot = time_lc_fraction_df()
+            if not ts_plot.empty:
+                color_map = {info["name"]: info["color"] for _, info in LC_TYPE5_INFO.items()}
+                fig_ts = px.line(
+                    ts_plot,
+                    x="year",
+                    y="fraction",
+                    color="LC_Type5_name",
+                    markers=True,
+                    color_discrete_map=color_map,
+                    labels={"fraction": "Spatial mean class presence"},
+                    title="LC_Type5 class fraction through time",
+                )
+                fig_ts.update_traces(mode="lines+markers")
+                st.plotly_chart(fig_ts, use_container_width=True)
+            else:
+                st.warning("No time series data available.")
         else:
-            st.warning('No time series data available.')
-    else:
-        # For t2m and tp, show overall mean time series (no vegetation filter)
-        ts_df = ts_df.groupby('year')[selected_var].mean().reset_index()
-        st.subheader(f'Time Series of {selected_var} (Scotland mean)')
-        if not ts_df.empty:
-            fig_ts = px.line(
-                ts_df,
-                x='year',
-                y=selected_var,
-                markers=True
+            view_mode = st.radio(
+                "Time series view",
+                options=["Overall mean", f"Mean by {INDEX_VAR}"],
+                horizontal=True,
             )
-            st.plotly_chart(fig_ts)
-        else:
-            st.warning('No time series data available.')
 
-st.info('Edit the code if your NetCDF variable names differ.')
+            if view_mode == "Overall mean":
+                ts_plot = time_da_to_df(selected_var)
+                if not ts_plot.empty:
+                    fig_ts = px.line(
+                        ts_plot,
+                        x="year",
+                        y=selected_var,
+                        markers=True,
+                        title=f"{selected_var} through time",
+                    )
+                    fig_ts.update_traces(mode="lines+markers")
+                    st.plotly_chart(fig_ts, use_container_width=True)
+                else:
+                    st.warning("No time series data available.")
+            else:
+                ts_plot = time_var_by_lc_df(selected_var)
+                if not ts_plot.empty:
+                    color_map = {info["name"]: info["color"] for _, info in LC_TYPE5_INFO.items()}
+                    fig_ts = px.line(
+                        ts_plot,
+                        x="year",
+                        y=selected_var,
+                        color="LC_Type5_name",
+                        markers=True,
+                        color_discrete_map=color_map,
+                        title=f"{selected_var} through time by {INDEX_VAR}",
+                    )
+                    fig_ts.update_traces(mode="lines+markers")
+                    st.plotly_chart(fig_ts, use_container_width=True)
+                else:
+                    st.warning("No LC_Type5 time series data available for this variable.")
