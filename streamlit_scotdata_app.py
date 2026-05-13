@@ -43,9 +43,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+MINIO_ACCESS_KEY = st.secrets["MINIO_ACCESS_KEY"]
+MINIO_SECRET_KEY = st.secrets["MINIO_SECRET_KEY"]
+
 MINIO_ENDPOINT = "general-gensto.datalabs.ceh.ac.uk"
-MINIO_ACCESS_KEY = "cb17a3b6-65e8-4cb1-8b8c-8f51f513f23a"
-MINIO_SECRET_KEY = "af8d4045-ce18-41c6-871f-a4394eb58c07"
 MINIO_BUCKET = "notebooks"
 NETCDF_FILENAME = "scotland_merged_dataset_v2.nc"
 
